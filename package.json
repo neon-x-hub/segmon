@@ -1,0 +1,19 @@
+{
+    "name": "segmon",
+    "version": "1.0.0",
+    "description": "A segmented JSON database with custom IDs, dual-size limits, and flexible filtering.",
+    "main": "dist/index.js",
+    "type": "module",
+    "scripts": {},
+    "keywords": [
+        "database",
+        "json",
+        "lowdb",
+        "segment",
+        "nosql"
+    ],
+    "author": "neon-x-hub",
+    "license": "MIT",
+    "dependencies": {},
+    "devDependencies": {}
+}
