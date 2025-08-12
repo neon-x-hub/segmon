@@ -1,4 +1,5 @@
 # **Segmon** 🗃️
+[![npm](https://img.shields.io/npm/v/segmon)](https://www.npmjs.com/package/segmon)
 
 *A lightweight, high performance segmented JSON database with custom IDs, dual-size limits, and flexible filtering and pagination.*
 
