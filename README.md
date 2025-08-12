@@ -169,6 +169,8 @@ Segmon delivers exceptional performance across JavaScript runtimes, with Bun sho
 ```bash
     # or use `bun` if you want
     node benchmark/bench.js
+    # or simply:
+    npm run bench
 ```
 
 ### Note:
