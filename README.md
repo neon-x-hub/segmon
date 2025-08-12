@@ -1,6 +1,6 @@
 # **Segmon** 🗃️
 
-*A lightweight, segmented JSON database with custom IDs, dual-size limits, and flexible filtering and pagination.*
+*A lightweight, high performance segmented JSON database with custom IDs, dual-size limits, and flexible filtering and pagination.*
 
 Perfect for:
 ✅ **Small to medium projects** needing structured storage
