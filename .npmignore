@@ -1,0 +1,34 @@
+# Development files
+*.log
+*.swp
+.DS_Store
+.idea/
+.vscode/
+
+# Test and benchmark files
+test/
+benchmark/
+coverage/
+
+# Build system
+.gitignore
+.npmignore
+.travis.yml
+.github/
+
+# Documentation (optional - include if you prefer separate docs)
+docs/
+examples/
+
+# Environment files
+.env
+.env.*
+
+# System files
+Thumbs.db
+
+# Optional - include if you want to force-include certain files
+!dist/
+!src/
+!LICENSE
+!README.md
