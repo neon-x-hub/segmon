@@ -4,9 +4,13 @@
 *A lightweight, high performance segmented JSON database with custom IDs, dual-size limits, and flexible filtering and pagination.*
 
 Perfect for:
+
 ✅ **Small to medium projects** needing structured storage
+
 ✅ **Apps where MongoDB is overkill** but filesystem storage is too basic
+
 ✅ **CLI tools** requiring fast, atomic operations
+
 ✅ **Prototyping** with zero dependencies
 
 ---
