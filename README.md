@@ -203,7 +203,7 @@ Benchmarks measure cold-start operations on a clean database. Your results may v
 **Notes:**
 - Either `segmentSize` or `maxItemsPerSegment` can limit segmentation
 - When both are set, whichever limit is hit first triggers new segment creation
-- `idGenerator` receives no arguments and should return a unique string
+- `idGenerator` receives the desired ID length (idLength) and should return a unique string
 - `normaliseDocument` runs on all documents before they're filtered
 
 
