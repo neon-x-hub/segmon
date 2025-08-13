@@ -195,8 +195,8 @@ Benchmarks measure cold-start operations on a clean database. Your results may v
 | `basePath`           | `string`   | `"./segmon-data"`   | Base directory where collections will be stored                             |
 | `segmentSize`        | `number`   | `51200` (50KB)      | Maximum size of each segment file in bytes                                  |
 | `maxItemsPerSegment` | `number`   | `null` (unlimited)  | Maximum number of documents per segment file (overrides size limit if set)  |
-| `idGenerator`        | `function` | `generateId`        | Custom function to generate document IDs: `() => string`                    |
-| `idLength`           | `number`   | `6`                 | Length of auto-generated IDs (when using default generator)                 |
+| `idGenerator`        | `function` | `generateId`        | Custom function to generate document IDs: `(idLength) => string`                    |
+| `idLength`           | `number`   | `6`                 | Length of auto-generated IDs   |
 | `onFilter`           | `function` | `null`              | Custom filter function: `(doc, filter) => boolean`                          |
 | `normaliseDocument`  | `function` | `(doc) => doc`      | Document pre-processor function applied before storage/querying             |
 
