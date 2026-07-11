@@ -1,7 +1,7 @@
-import fs from 'fs/promises';
-import path from 'path';
 import generateId from './id/generate.js';
-
+import { MutexManager } from './mutex.js';
+import { StorageManager } from './storage.js';
+import { matchesFilter, deepMerge } from './query.js';
 
 /**
  * A segmented JSON database provider with customizable ID generation, filtering, and dual segmentation limits.
@@ -34,7 +34,7 @@ class Segmon {
         idLength = 6,
         idGenerator = generateId,
         normaliseDocument = (doc) => doc
-    }) {
+    } = {}) {
         this.basePath = basePath;
         this.segmentSize = segmentSize;
         this.maxItemsPerSegment = maxItemsPerSegment;
@@ -42,7 +42,18 @@ class Segmon {
         this.normaliseDocument = normaliseDocument;
         this.onFilter = onFilter;
         this.idGenerator = idGenerator;
-        this.locks = new Map();
+
+        // Initialize helper managers
+        this.mutex = new MutexManager();
+        this.locks = this.mutex.locks; // Keep reference to the lock Map for backward compatibility
+
+        this.storage = new StorageManager({
+            basePath: this.basePath,
+            segmentSize: this.segmentSize,
+            maxItemsPerSegment: this.maxItemsPerSegment,
+            idLength: this.idLength,
+            idGenerator: this.idGenerator
+        });
     }
 
     /* ------------------- PUBLIC API ------------------- */
@@ -50,26 +61,24 @@ class Segmon {
     /**
      * Creates a new document in the given collection, returning the created document.
      * The document will be assigned a unique ID based on the current segment and the
-     * provided data. If the document cannot be created (e.g. due to a segment size
-     * limit being exceeded), an error is thrown. If the ID generation fails (e.g.
-     * due to a collision), an error is thrown.
+     * provided data.
      *
      * @param {string} collectionName - The name of the collection to create the document in.
      * @param {object} data - The document data to create.
      * @returns {Promise<object>} The created document.
      */
     async create(collectionName, data) {
-        const release = await this._lock(collectionName);
+        const release = await this.mutex.lock(collectionName);
         try {
-            const { segment, segmentFile } = await this._getWritableSegment(collectionName);
-            const records = await this._readSegment(collectionName, segmentFile);
+            const { segment, segmentFile } = await this.storage.getWritableSegment(collectionName);
+            const records = await this.storage.readSegment(collectionName, segmentFile);
 
             // Generate ID with collision check against existing records
-            const id = await this._generateId(segment, records);
+            const id = await this.storage.generateId(segment, records);
             const doc = { ...data, id };
             records[id] = doc;
 
-            await this._writeSegment(collectionName, segmentFile, records);
+            await this.storage.writeSegment(collectionName, segmentFile, records);
             return doc;
         } catch (err) {
             // Handle ID generation failures
@@ -94,16 +103,16 @@ class Segmon {
     async bulkCreate(collectionName, docsArray) {
         if (!Array.isArray(docsArray)) return [];
 
-        const release = await this._lock(collectionName);
+        const release = await this.mutex.lock(collectionName);
         try {
             const created = [];
-            let { segment, segmentFile } = await this._getWritableSegment(collectionName);
-            let records = await this._readSegment(collectionName, segmentFile);
+            let { segment, segmentFile } = await this.storage.getWritableSegment(collectionName);
+            let records = await this.storage.readSegment(collectionName, segmentFile);
             let currentSize = Buffer.byteLength(JSON.stringify(records));
             let currentItemCount = Object.keys(records).length;
 
             for (const data of docsArray) {
-                const id = await this._generateId(segment, records);
+                const id = await this.storage.generateId(segment, records);
                 const doc = { ...data, id };
                 records[id] = doc;
                 created.push(doc);
@@ -116,7 +125,7 @@ class Segmon {
                     currentItemCount >= this.maxItemsPerSegment;
 
                 if (sizeLimitReached || itemLimitReached) {
-                    await this._writeSegment(collectionName, segmentFile, records);
+                    await this.storage.writeSegment(collectionName, segmentFile, records);
                     segment++;
                     segmentFile = `segment_${segment}.json`;
                     records = {};
@@ -126,7 +135,7 @@ class Segmon {
             }
 
             if (Object.keys(records).length > 0) {
-                await this._writeSegment(collectionName, segmentFile, records);
+                await this.storage.writeSegment(collectionName, segmentFile, records);
             }
 
             return created;
@@ -139,7 +148,6 @@ class Segmon {
             release();
         }
     }
-
 
     /**
      * Finds documents in the collection that match the given filter object.
@@ -154,14 +162,14 @@ class Segmon {
      * @returns {Promise<object[]>} An array of matching documents.
      */
     async find(collectionName, filter = {}, { limit = Infinity, offset = 0 } = {}) {
-        const segments = await this._listSegments(collectionName);
+        const segments = await this.storage.listSegments(collectionName);
         const results = [];
         let skipped = 0;
 
         for (const seg of segments) {
-            const records = await this._readSegment(collectionName, seg);
+            const records = await this.storage.readSegment(collectionName, seg);
             for (const doc of Object.values(records)) {
-                if (!this._matchesFilter(doc, filter)) continue;
+                if (!matchesFilter(doc, filter, this.onFilter, this.normaliseDocument)) continue;
                 if (skipped < offset) { skipped++; continue; }
                 results.push(doc);
                 if (results.length >= limit) return results;
@@ -179,8 +187,8 @@ class Segmon {
      * not found.
      */
     async findById(collectionName, id) {
-        const segmentFile = this._segmentFileFromId(id);
-        const records = await this._readSegment(collectionName, segmentFile);
+        const segmentFile = this.storage.segmentFileFromId(id);
+        const records = await this.storage.readSegment(collectionName, segmentFile);
         return records[id] || null;
     }
 
@@ -193,12 +201,12 @@ class Segmon {
      * the same order as the IDs provided.
      */
     async bulkFindByIds(collectionName, ids) {
-        const grouped = this._groupIdsBySegment(ids);
+        const grouped = this.storage.groupIdsBySegment(ids);
         const results = [];
 
         for (const [segment, idList] of Object.entries(grouped)) {
             const file = `segment_${segment}.json`;
-            const records = await this._readSegment(collectionName, file);
+            const records = await this.storage.readSegment(collectionName, file);
             for (const id of idList) {
                 if (records[id]) results.push(records[id]);
             }
@@ -215,14 +223,14 @@ class Segmon {
      * @returns {Promise<object|null>} The updated document, or null if not found.
      */
     async update(collectionName, id, updates) {
-        const release = await this._lock(collectionName);
+        const release = await this.mutex.lock(collectionName);
         try {
-            const segmentFile = this._segmentFileFromId(id);
-            const records = await this._readSegment(collectionName, segmentFile);
+            const segmentFile = this.storage.segmentFileFromId(id);
+            const records = await this.storage.readSegment(collectionName, segmentFile);
             if (!records[id]) return null;
 
-            records[id] = this._deepMerge(records[id], updates);
-            await this._writeSegment(collectionName, segmentFile, records);
+            records[id] = deepMerge(records[id], updates);
+            await this.storage.writeSegment(collectionName, segmentFile, records);
             return records[id];
         } finally {
             release();
@@ -233,20 +241,17 @@ class Segmon {
      * Updates multiple documents in the specified collection based on the
      * provided array of update objects. Each object in the array should
      * contain an `id` and a `data` object representing the updates to apply.
-     * This function updates documents more efficiently than calling {@link update}
-     * multiple times for large arrays, as it writes to disk fewer times.
      *
      * @param {string} collectionName - The name of the collection to update the documents in.
      * @param {object[]} updatesArray - An array of objects, each containing an `id` and `data`.
      * @returns {Promise<object[]>} An array of updated documents.
      */
-
     async bulkUpdate(collectionName, updatesArray) {
-        const release = await this._lock(collectionName);
+        const release = await this.mutex.lock(collectionName);
         try {
             const grouped = {};
             for (const { id, data } of updatesArray) {
-                const seg = this._segmentFromId(id);
+                const seg = this.storage.segmentFromId(id);
                 if (!grouped[seg]) grouped[seg] = [];
                 grouped[seg].push({ id, data });
             }
@@ -254,16 +259,16 @@ class Segmon {
             const updated = [];
             for (const [seg, items] of Object.entries(grouped)) {
                 const file = `segment_${seg}.json`;
-                const records = await this._readSegment(collectionName, file);
+                const records = await this.storage.readSegment(collectionName, file);
 
                 for (const { id, data } of items) {
                     if (records[id]) {
-                        records[id] = this._deepMerge(records[id], data);
+                        records[id] = deepMerge(records[id], data);
                         updated.push(records[id]);
                     }
                 }
 
-                await this._writeSegment(collectionName, file, records);
+                await this.storage.writeSegment(collectionName, file, records);
             }
             return updated;
         } finally {
@@ -280,14 +285,14 @@ class Segmon {
      * deleted. If the document was not found, the function returns false.
      */
     async delete(collectionName, id) {
-        const release = await this._lock(collectionName);
+        const release = await this.mutex.lock(collectionName);
         try {
-            const segmentFile = this._segmentFileFromId(id);
-            const records = await this._readSegment(collectionName, segmentFile);
+            const segmentFile = this.storage.segmentFileFromId(id);
+            const records = await this.storage.readSegment(collectionName, segmentFile);
             if (!records[id]) return false;
 
             delete records[id];
-            await this._writeSegment(collectionName, segmentFile, records);
+            await this.storage.writeSegment(collectionName, segmentFile, records);
             return true;
         } finally {
             release();
@@ -302,14 +307,14 @@ class Segmon {
      * @returns {Promise<number>} The number of documents deleted.
      */
     async bulkDelete(collectionName, ids) {
-        const release = await this._lock(collectionName);
+        const release = await this.mutex.lock(collectionName);
         try {
-            const grouped = this._groupIdsBySegment(ids);
+            const grouped = this.storage.groupIdsBySegment(ids);
             let deletedCount = 0;
 
             for (const [seg, idList] of Object.entries(grouped)) {
                 const file = `segment_${seg}.json`;
-                const records = await this._readSegment(collectionName, file);
+                const records = await this.storage.readSegment(collectionName, file);
                 let changed = false;
                 for (const id of idList) {
                     if (records[id]) {
@@ -318,7 +323,7 @@ class Segmon {
                         changed = true;
                     }
                 }
-                if (changed) await this._writeSegment(collectionName, file, records);
+                if (changed) await this.storage.writeSegment(collectionName, file, records);
             }
             return deletedCount;
         } finally {
@@ -326,153 +331,54 @@ class Segmon {
         }
     }
 
-    /* ------------------- INTERNAL HELPERS ------------------- */
+    /* ------------------- DELEGATION ALIASES (BACKWARD COMPATIBILITY) ------------------- */
 
     _deepMerge(target, source) {
-        if (!source || typeof source !== 'object') return target;
-        if (!target || typeof target !== 'object') target = {};
-
-        for (const key of Object.keys(source)) {
-            if (
-                source[key] &&
-                typeof source[key] === 'object' &&
-                !Array.isArray(source[key])
-            ) {
-                target[key] = this._deepMerge(target[key], source[key]);
-            } else {
-                target[key] = source[key];
-            }
-        }
-        return target;
+        return deepMerge(target, source);
     }
 
-
     async _getCollectionPath(name) {
-        const dir = path.join(this.basePath, name);
-        await fs.mkdir(dir, { recursive: true });
-        return dir;
+        return this.storage.getCollectionPath(name);
     }
 
     async _listSegments(name) {
-        const dir = await this._getCollectionPath(name);
-        const files = await fs.readdir(dir);
-        return files.filter(f => f.startsWith('segment_') && f.endsWith('.json')).sort();
+        return this.storage.listSegments(name);
     }
 
     async _getWritableSegment(name) {
-        const segments = await this._listSegments(name);
-        if (segments.length === 0) return { segment: 0, segmentFile: 'segment_0.json' };
-
-        const lastSegment = segments[segments.length - 1];
-        const segNum = parseInt(lastSegment.match(/segment_(\d+)\.json/)[1]);
-        const filePath = path.join(await this._getCollectionPath(name), lastSegment);
-        const stats = await fs.stat(filePath);
-        const records = await this._readSegment(name, lastSegment);
-
-        const isSizeExceeded = stats.size >= this.segmentSize;
-        const isItemCountExceeded = this.maxItemsPerSegment &&
-            Object.keys(records).length >= this.maxItemsPerSegment;
-
-        if (isSizeExceeded || isItemCountExceeded) {
-            return { segment: segNum + 1, segmentFile: `segment_${segNum + 1}.json` };
-        }
-        return { segment: segNum, segmentFile: lastSegment };
+        return this.storage.getWritableSegment(name);
     }
 
     async _readSegment(name, segment) {
-        try {
-            const file = path.join(await this._getCollectionPath(name), segment);
-            const data = await fs.readFile(file, 'utf8');
-            return JSON.parse(data);
-        } catch (err) {
-            if (err.code === 'ENOENT') return {};
-            throw err;
-        }
+        return this.storage.readSegment(name, segment);
     }
 
     async _writeSegment(name, segment, records) {
-        const file = path.join(await this._getCollectionPath(name), segment);
-        await fs.writeFile(file, JSON.stringify(records, null, 2));
+        return this.storage.writeSegment(name, segment, records);
     }
 
     async _generateId(segment, existingRecords = null) {
-        let attempts = 0;
-        const maxAttempts = 3;
-
-        while (attempts < maxAttempts) {
-            const generatedId = await this.idGenerator(this.idLength);
-            const id = `${segment}_${generatedId}`;
-            if (!existingRecords || !existingRecords[id]) return id;
-            attempts++;
-        }
-        throw new Error(`Failed to generate unique ID after ${maxAttempts} attempts`);
+        return this.storage.generateId(segment, existingRecords);
     }
 
     _segmentFromId(id) {
-        return parseInt(id.split('_')[0], 10);
+        return this.storage.segmentFromId(id);
     }
 
     _segmentFileFromId(id) {
-        return `segment_${this._segmentFromId(id)}.json`;
+        return this.storage.segmentFileFromId(id);
     }
 
     _groupIdsBySegment(ids) {
-        const grouped = {};
-        for (const id of ids) {
-            const seg = this._segmentFromId(id);
-            if (!grouped[seg]) grouped[seg] = [];
-            grouped[seg].push(id);
-        }
-        return grouped;
+        return this.storage.groupIdsBySegment(ids);
     }
 
     _matchesFilter(doc, filter) {
-        const normalizedDoc = this.normaliseDocument(doc);
-
-        if (this.onFilter) {
-            return this.onFilter(normalizedDoc, filter);
-        }
-
-        const matchField = (docField, filterVal) => {
-            if (typeof filterVal === 'function') {
-                return filterVal(docField);
-            }
-
-            if (typeof filterVal === 'object' && filterVal !== null && !Array.isArray(filterVal)) {
-                const { min, max } = filterVal;
-                if (typeof docField === 'number' || docField instanceof Date) {
-                    const value = docField instanceof Date ? docField.getTime() : docField;
-                    const minVal = min instanceof Date ? min.getTime() : min;
-                    const maxVal = max instanceof Date ? max.getTime() : max;
-                    if (min !== undefined && value < minVal) return false;
-                    if (max !== undefined && value > maxVal) return false;
-                    return true;
-                }
-
-                return false;
-            }
-
-            if (typeof docField === 'string' && typeof filterVal === 'string') {
-                return docField.toLowerCase().includes(filterVal.toLowerCase());
-            }
-
-            return docField === filterVal;
-        };
-
-        return Object.entries(filter).every(([key, value]) =>
-            matchField(normalizedDoc[key], value)
-        );
+        return matchesFilter(doc, filter, this.onFilter, this.normaliseDocument);
     }
 
-
-
-    /* ------------------- SIMPLE MUTEX ------------------- */
     async _lock(name) {
-        const existing = this.locks.get(name) || Promise.resolve();
-        let release;
-        const lock = new Promise(res => (release = res));
-        this.locks.set(name, existing.then(() => lock));
-        return release;
+        return this.mutex.lock(name);
     }
 }
 
