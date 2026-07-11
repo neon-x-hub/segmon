@@ -4,11 +4,11 @@
 
 *A lightweight, high performance segmented JSON database with custom IDs, dual-size limits, and flexible filtering and pagination.*
 
-Perfect for:
-✅ **Small to medium projects** needing structured storage
-✅ **Apps where MongoDB is overkill** but filesystem storage is too basic
-✅ **CLI tools** requiring fast, atomic operations
-✅ **Prototyping** with zero dependencies
+Segmon is suitable for:
+- Small to medium projects requiring structured JSON-based storage.
+- Applications where fully-fledged NoSQL solutions like MongoDB are unnecessary, but basic filesystem storage is insufficient.
+- Command-line interfaces (CLIs) requiring atomic write operations.
+- Rapid prototyping with zero external dependencies.
 
 ---
 
