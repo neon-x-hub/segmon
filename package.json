@@ -6,7 +6,7 @@
     "type": "module",
     "scripts": {
         "bench": "node benchmark/bench.js",
-        "test": "echo \"Error: no test specified\" && exit 1"
+        "test": "node --test tests/segmon.test.js"
     },
     "files": [
         "index.js",
