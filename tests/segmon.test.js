@@ -277,3 +277,80 @@ test('Segmon - Custom ID Generation & Length', async (t) => {
     const doc = await db.create(colName, { name: 'Test' });
     assert.strictEqual(doc.id, '0_custom_12_xyz');
 });
+
+test('Segmon - Numerical Segment Sorting', async (t) => {
+    const db = new Segmon({ basePath: TEST_DB_PATH });
+    const colName = 'sorting-test';
+    
+    // Ensure directory exists
+    const dir = await db.storage.getCollectionPath(colName);
+    
+    // Create dummy files that would sort alphabetically wrong: segment_10 before segment_2
+    await fs.writeFile(path.join(dir, 'segment_10.json'), '{}');
+    await fs.writeFile(path.join(dir, 'segment_2.json'), '{}');
+    await fs.writeFile(path.join(dir, 'segment_1.json'), '{}');
+
+    const segments = await db.storage.listSegments(colName);
+    assert.deepStrictEqual(segments, ['segment_1.json', 'segment_2.json', 'segment_10.json']);
+});
+
+test('Segmon - Cursor-Based Pagination & Bidirectional Scanning', async (t) => {
+    const db = new Segmon({
+        basePath: TEST_DB_PATH,
+        maxItemsPerSegment: 3
+    });
+    const colName = 'cursor-paged';
+
+    // Insert 10 items
+    const items = [];
+    for (let i = 0; i < 10; i++) {
+        items.push({ num: i });
+    }
+    const created = await db.bulkCreate(colName, items);
+    assert.strictEqual(created.length, 10);
+
+    // 1. Forward Keyset pagination
+    // Page 1
+    const page1 = await db.find(colName, {}, { limit: 3 });
+    assert.strictEqual(page1.length, 3);
+    assert.deepStrictEqual(page1.map(d => d.num), [0, 1, 2]);
+
+    // Page 2 (starts after page1's last item)
+    const cursor1 = page1[2].id;
+    const page2 = await db.find(colName, {}, { limit: 3, latestItemFetched: cursor1 });
+    assert.strictEqual(page2.length, 3);
+    assert.deepStrictEqual(page2.map(d => d.num), [3, 4, 5]);
+
+    // Page 3 (starts after page2's last item)
+    const cursor2 = page2[2].id;
+    const page3 = await db.find(colName, {}, { limit: 3, latestItemFetched: cursor2 });
+    assert.strictEqual(page3.length, 3);
+    assert.deepStrictEqual(page3.map(d => d.num), [6, 7, 8]);
+
+    // Page 4 (starts after page3's last item)
+    const cursor3 = page3[2].id;
+    const page4 = await db.find(colName, {}, { limit: 3, latestItemFetched: cursor3 });
+    assert.strictEqual(page4.length, 1);
+    assert.deepStrictEqual(page4.map(d => d.num), [9]);
+
+    // 2. Backward Keyset pagination
+    // Page 1 (Backward)
+    const backPage1 = await db.find(colName, {}, { limit: 3, scanDirection: 'backward' });
+    assert.strictEqual(backPage1.length, 3);
+    assert.deepStrictEqual(backPage1.map(d => d.num), [9, 8, 7]);
+
+    // Page 2 (Backward - starts after backPage1's last item)
+    const backCursor1 = backPage1[2].id;
+    const backPage2 = await db.find(colName, {}, { limit: 3, scanDirection: 'backward', latestItemFetched: backCursor1 });
+    assert.strictEqual(backPage2.length, 3);
+    assert.deepStrictEqual(backPage2.map(d => d.num), [6, 5, 4]);
+
+    // 3. Deleted Cursor Fallback
+    // Delete item 4 (which was the last item of backPage2)
+    const targetToDelete = created[4]; // num = 4
+    await db.delete(colName, targetToDelete.id);
+
+    // Query starting after cursor2 (num = 5) in forward scan
+    const fallbackForward = await db.find(colName, {}, { limit: 3, latestItemFetched: targetToDelete.id });
+    assert.deepStrictEqual(fallbackForward.map(d => d.num), [3, 5, 6]);
+});
