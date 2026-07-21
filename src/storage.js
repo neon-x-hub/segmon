@@ -40,16 +40,17 @@ export class StorageManager {
         return dir;
     }
 
-    /**
-     * Lists all sorted segment files inside a collection directory.
-     * @param {string} name - Collection name.
-     * @returns {Promise<string[]>} List of segment file names.
-     */
     async listSegments(name) {
         const dir = await this.getCollectionPath(name);
         try {
             const files = await fs.readdir(dir);
-            return files.filter(f => f.startsWith('segment_') && f.endsWith('.json')).sort();
+            return files
+                .filter(f => f.startsWith('segment_') && f.endsWith('.json'))
+                .sort((a, b) => {
+                    const numA = parseInt(a.match(/segment_(\d+)\.json/)[1], 10);
+                    const numB = parseInt(b.match(/segment_(\d+)\.json/)[1], 10);
+                    return numA - numB;
+                });
         } catch (err) {
             if (err.code === 'ENOENT') return [];
             throw err;
