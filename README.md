@@ -153,6 +153,13 @@ Segmon delivers high performance across JavaScript environments. In benchmark su
 | **Update** | 2.32ms / 1.45ms | 1.26ms / 1.12ms | 15-40% faster |
 | **Delete** | 1.91ms / 1.25ms | 1.04ms / 0.88ms | 15-35% faster |
 
+### Pagination Method Comparison (10,000 Documents)
+
+| Pagination Method | Query Time | Performance Advantage |
+| --- | --- | --- |
+| **Traditional Offset** (`offset: 9980`) | 77.15ms | Baseline |
+| **Keyset Cursor** (`latestItemFetched: ID`) | 1.72ms | **45x faster** (saves 98% processing time) |
+
 ### Runtime Highlights
 
 - **Bun Integration**: Bun provides substantial performance benefits (20% to 28% faster) when handling larger databases with over 10,000 documents.
@@ -180,7 +187,7 @@ node benchmark/bench.js
 
 ## Testing
 
-Segmon is equipped with a comprehensive test suite covering basic CRUD, bulk operations, advanced query filtering, pagination, dual segmentation limits, concurrent writes, and custom ID generation.
+Segmon is equipped with a comprehensive test suite covering basic CRUD, bulk operations, advanced query filtering, pagination, dual segmentation limits, concurrent writes, and custom ID generation. 
 
 Tests run using Node.js's native test runner (requiring zero external devDependencies):
 
@@ -192,16 +199,8 @@ npm test
 Or run the test file directly:
 
 ```bash
-    # or use `bun` if you want
-    node benchmark/bench.js
+node --test tests/segmon.test.js
 ```
-
-### Note:
-
-Benchmarks measure cold-start operations on a clean database. Your results may vary based on:
-• Hardware specifications (SSD vs HDD)
-• Node.js version
-• System load during testing
 
 ---
 
@@ -211,22 +210,15 @@ Benchmarks measure cold-start operations on a clean database. Your results may v
 
 The `Segmon` constructor accepts the following options:
 
-| Parameter             | Type       | Default Value       | Description                                                                 |
-|-----------------------|------------|---------------------|-----------------------------------------------------------------------------|
-| `basePath`           | `string`   | `"./segmon-data"`   | Base directory where collections will be stored                             |
-| `segmentSize`        | `number`   | `51200` (50KB)      | Maximum size of each segment file in bytes                                  |
-| `maxItemsPerSegment` | `number`   | `null` (unlimited)  | Maximum number of documents per segment file (overrides size limit if set)  |
-| `idGenerator`        | `function` | `generateId`        | Custom function to generate document IDs: `() => string`                    |
-| `idLength`           | `number`   | `6`                 | Length of auto-generated IDs (when using default generator)                 |
-| `onFilter`           | `function` | `null`              | Custom filter function: `(doc, filter) => boolean`                          |
-| `normaliseDocument`  | `function` | `(doc) => doc`      | Document pre-processor function applied before storage/querying             |
-
-**Notes:**
-- Either `segmentSize` or `maxItemsPerSegment` can limit segmentation
-- When both are set, whichever limit is hit first triggers new segment creation
-- `idGenerator` receives no arguments and should return a unique string
-- `normaliseDocument` runs on all documents before they're filtered
-
+| Parameter | Type | Default Value | Description |
+| --- | --- | --- | --- |
+| `basePath` | `string` | `"./segmon-data"` | Path to the directory where collection data is saved |
+| `segmentSize` | `number` | `51200` (50KB) | Maximum segment file size in bytes |
+| `maxItemsPerSegment` | `number` | `null` | Maximum documents per segment file (overrides size limit if reached first) |
+| `idLength` | `number` | `6` | Length of auto-generated alphanumeric IDs |
+| `idGenerator` | `function` | `generateId` | Custom function returning a unique ID: `(idLength) => string` |
+| `onFilter` | `function` | `null` | Custom filter engine matching function: `(doc, filter) => boolean` |
+| `normaliseDocument` | `function` | `(doc) => doc` | Preprocessor to run on documents prior to query filtering |
 
 ### Core Methods
 
@@ -237,6 +229,17 @@ The `Segmon` constructor accepts the following options:
 | `findById(collection, id)` | Retrieves a single document by its ID | `bulkFindByIds(collection, ids)` |
 | `update(collection, id, changes)` | Merges changes into a document | `bulkUpdate(collection, updates)` |
 | `delete(collection, id)` | Deletes a document by ID | `bulkDelete(collection, ids)` |
+
+#### `find` Options
+
+The third parameter of the `find` method is an optional object supporting the following pagination properties:
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `limit` | `number` | `Infinity` | Maximum number of matching documents to return. |
+| `offset` | `number` | `0` | Traditional pagination offset (scans all preceding items). |
+| `scanDirection` | `string` | `'forward'` | Direction to scan segments: `'forward'` (first to last) or `'backward'` (last to first). |
+| `latestItemFetched` | `string` | `null` | The ID of the last document fetched. Enables fastKeyset / cursor pagination. |
 
 ---
 
