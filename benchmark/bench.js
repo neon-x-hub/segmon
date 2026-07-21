@@ -82,6 +82,20 @@ async function benchmark() {
       await db.delete(COLLECTION, firstDoc.id);
     });
 
+    // 5. Pagination Comparison (Traditional Offset vs Keyset Cursor)
+    if (size > 100) {
+      const targetIndex = size - 20;
+      const cursorDoc = createdDocs[targetIndex];
+
+      await runBenchmark(`paginate (offset ${targetIndex})`, async () => {
+        await db.find(COLLECTION, {}, { limit: 10, offset: targetIndex });
+      });
+
+      await runBenchmark(`paginate (cursor keyset)`, async () => {
+        await db.find(COLLECTION, {}, { limit: 10, latestItemFetched: cursorDoc.id });
+      });
+    }
+
     // Cleanup
     await fs.rm(path.join(BENCHMARK_PATH, COLLECTION), { recursive: true });
   }
