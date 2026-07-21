@@ -150,25 +150,56 @@ class Segmon {
     }
 
     /**
-     * Finds documents in the collection that match the given filter object.
-     * Supports pagination through the `limit` and `offset` options.
-     *
-     * @param {string} collectionName - The name of the collection to query.
-     * @param {object} filter - The filter object to apply. Filter properties
-     * will be matched against document properties of the same name.
-     * @param {{ limit: number, offset: number }} [options] - Optional pagination
-     * options. `limit` specifies the maximum number of documents to return, and
-     * `offset` specifies the number of documents to skip before returning results.
+     * @param {{ limit: number, offset: number, scanDirection: string, latestItemFetched: string }} [options] - Optional pagination
+     * options. `limit` specifies the maximum number of documents to return,
+     * `offset` specifies the number of documents to skip,
+     * `scanDirection` specifies direction ('forward' or 'backward', default 'forward'),
+     * `latestItemFetched` specifies the ID of the cursor document to start search after.
      * @returns {Promise<object[]>} An array of matching documents.
      */
-    async find(collectionName, filter = {}, { limit = Infinity, offset = 0 } = {}) {
-        const segments = await this.storage.listSegments(collectionName);
+    async find(collectionName, filter = {}, { limit = Infinity, offset = 0, scanDirection = 'forward', latestItemFetched = null } = {}) {
+        let segments = await this.storage.listSegments(collectionName);
+
+        if (scanDirection === 'backward') {
+            segments.reverse();
+        }
+
+        if (latestItemFetched) {
+            const startSegment = this.storage.segmentFromId(latestItemFetched);
+            segments = segments.filter(seg => {
+                const num = parseInt(seg.match(/segment_(\d+)\.json/)[1], 10);
+                return scanDirection === 'backward' ? num <= startSegment : num >= startSegment;
+            });
+        }
+
         const results = [];
         let skipped = 0;
+        let cursorFound = latestItemFetched ? false : true;
+
+        if (latestItemFetched && segments.length > 0) {
+            // Graceful fallback check: if the starting segment doesn't contain the cursor (e.g. deleted),
+            // disable cursor skipping so we scan from the beginning of this segment.
+            const firstSegRecords = await this.storage.readSegment(collectionName, segments[0]);
+            if (!firstSegRecords[latestItemFetched]) {
+                cursorFound = true;
+            }
+        }
 
         for (const seg of segments) {
             const records = await this.storage.readSegment(collectionName, seg);
-            for (const doc of Object.values(records)) {
+            let docs = Object.values(records);
+            if (scanDirection === 'backward') {
+                docs.reverse();
+            }
+
+            for (const doc of docs) {
+                if (!cursorFound) {
+                    if (doc.id === latestItemFetched) {
+                        cursorFound = true;
+                    }
+                    continue; // Skip the cursor itself and everything before it
+                }
+
                 if (!matchesFilter(doc, filter, this.onFilter, this.normaliseDocument)) continue;
                 if (skipped < offset) { skipped++; continue; }
                 results.push(doc);
